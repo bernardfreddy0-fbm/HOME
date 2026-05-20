@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Im Cam — Flux caméra</title>
+  <link href="https://vjs.zencdn.net/8.6.1/video-js.css" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 20px;
+    }
+
+    /* ── Header ────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      max-width: 854px;
+    }
+
+    .badge-live {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #666;
+      transition: all .3s;
+    }
+    .badge-live.active {
+      background: rgba(220, 38, 38, .15);
+      border-color: #dc2626;
+      color: #ef4444;
+    }
+    .badge-live .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #666;
+      transition: background .3s;
+    }
+    .badge-live.active .dot {
+      background: #ef4444;
+      box-shadow: 0 0 6px #ef4444;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: .4; }
+    }
+
+    .status-text {
+      font-size: 13px;
+      color: #666;
+      flex: 1;
+    }
+    .status-text.ready { color: #4ade80; }
+    .status-text.error { color: #f87171; }
+
+    /* ── Player ────────────────────────────── */
+    .player-wrap {
+      width: 100%;
+      max-width: 854px;
+      aspect-ratio: 16/9;
+      background: #111;
+      border-radius: 8px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #cam {
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    .overlay-spinner {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: rgba(0,0,0,.7);
+      z-index: 10;
+      font-size: 14px;
+      color: #aaa;
+    }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid #333;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .overlay-spinner.hidden { display: none; }
+
+    /* ── Controls ──────────────────────────── */
+    .controls {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      max-width: 854px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      padding: 8px 18px;
+      border-radius: 6px;
+      border: 1px solid #333;
+      background: #1a1a1a;
+      color: #ccc;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background .2s, border-color .2s, color .2s;
+    }
+    .btn:hover { background: #252525; border-color: #555; color: #fff; }
+    .btn.primary {
+      background: #1d4ed8;
+      border-color: #2563eb;
+      color: #fff;
+    }
+    .btn.primary:hover { background: #2563eb; }
+
+    .url-input {
+      flex: 1;
+      min-width: 200px;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid #333;
+      background: #111;
+      color: #e0e0e0;
+      font-size: 13px;
+      font-family: monospace;
+    }
+    .url-input::placeholder { color: #555; }
+    .url-input:focus { outline: none; border-color: #3b82f6; }
+
+    /* ── Path counter ──────────────────────── */
+    .path-info {
+      font-size: 11px;
+      color: #444;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="badge-live" id="badgeLive">
+      <span class="dot"></span>
+      LIVE
+    </div>
+    <span class="status-text" id="statusText">Connexion en cours...</span>
+    <span class="path-info" id="pathInfo"></span>
+  </div>
+
+  <!-- Player -->
+  <div class="player-wrap">
+    <video id="cam" class="video-js vjs-default-skin" autoplay muted playsinline></video>
+    <div class="overlay-spinner" id="spinner">
+      <div class="spinner"></div>
+      <span id="spinnerMsg">Recherche du flux RTSP...</span>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="btn" id="btnNext">Essai suivant</button>
+    <input class="url-input" id="urlInput"
+           placeholder="rtsp://admin:admin@192.168.1.150:554/stream"
+           type="text">
+    <button class="btn primary" id="btnConnect">Connecter</button>
+  </div>
+
+  <script src="https://vjs.zencdn.net/8.6.1/video.min.js"></script>
+  <script>
+    const player      = videojs('cam', { liveui: true, controls: true });
+    const badge       = document.getElementById('badgeLive');
+    const statusText  = document.getElementById('statusText');
+    const pathInfo    = document.getElementById('pathInfo');
+    const spinner     = document.getElementById('spinner');
+    const spinnerMsg  = document.getElementById('spinnerMsg');
+    const btnNext     = document.getElementById('btnNext');
+    const btnConnect  = document.getElementById('btnConnect');
+    const urlInput    = document.getElementById('urlInput');
+
+    let hlsLoaded = false;
+
+    function loadHls() {
+      if (hlsLoaded) return;
+      hlsLoaded = true;
+      player.src({ src: '/stream/cam.m3u8', type: 'application/x-mpegURL' });
+      player.play().catch(() => {});
+    }
+
+    function setReady(url) {
+      badge.classList.add('active');
+      statusText.className = 'status-text ready';
+      statusText.textContent = 'Flux actif';
+      if (url) urlInput.placeholder = url;
+      spinner.classList.add('hidden');
+      loadHls();
+    }
+
+    function setSearching(msg) {
+      badge.classList.remove('active');
+      statusText.className = 'status-text';
+      statusText.textContent = msg || 'Recherche du flux...';
+      spinner.classList.remove('hidden');
+      spinnerMsg.textContent = msg || 'Recherche du flux RTSP...';
+      hlsLoaded = false;
+    }
+
+    // ── Poll /api/status ──────────────────────
+    let wasReady = false;
+    async function poll() {
+      try {
+        const res  = await fetch('/api/status');
+        const data = await res.json();
+        pathInfo.textContent = `chemin ${data.pathIndex + 1}/${data.totalPaths}`;
+
+        if (data.ready && !wasReady) {
+          setReady(data.url);
+        } else if (!data.ready && wasReady) {
+          setSearching('Reconnexion...');
+        } else if (!data.ready) {
+          spinnerMsg.textContent = `Essai chemin ${data.pathIndex + 1}/${data.totalPaths}...`;
+        }
+        wasReady = data.ready;
+      } catch { /* serveur indisponible */ }
+    }
+
+    setInterval(poll, 2000);
+    poll();
+
+    // ── Bouton Essai suivant ──────────────────
+    btnNext.addEventListener('click', async () => {
+      setSearching('Passage au chemin suivant...');
+      wasReady = false;
+      hlsLoaded = false;
+      await fetch('/api/next', { method: 'POST' });
+      setTimeout(poll, 500);
+    });
+
+    // ── Bouton Connecter ──────────────────────
+    btnConnect.addEventListener('click', async () => {
+      const url = urlInput.value.trim();
+      if (!url) return;
+      setSearching(`Connexion à ${url.replace(/:([^:@]+)@/, ':*****@')}...`);
+      wasReady = false;
+      hlsLoaded = false;
+      await fetch('/api/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      setTimeout(poll, 500);
+    });
+
+    urlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') btnConnect.click();
+    });
+  </script>
+</body>
+</html>
