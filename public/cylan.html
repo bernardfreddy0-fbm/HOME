@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Im Cam — WebRTC Direct</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d0d0d; color: #e0e0e0;
+      font-family: -apple-system, sans-serif;
+      min-height: 100vh; display: flex;
+      flex-direction: column; align-items: center;
+      justify-content: center; gap: 12px; padding: 16px;
+    }
+    .header { display:flex; align-items:center; gap:10px; width:100%; max-width:700px; }
+    .badge {
+      display:flex; align-items:center; gap:6px;
+      background:#1a1a1a; border:1px solid #333;
+      border-radius:20px; padding:4px 12px;
+      font-size:12px; font-weight:700; letter-spacing:1px; color:#666;
+      transition: all 0.3s;
+    }
+    .badge.live       { background:rgba(220,38,38,.15); border-color:#dc2626; color:#ef4444; }
+    .badge.connecting { background:rgba(59,130,246,.15); border-color:#3b82f6; color:#60a5fa; }
+    .badge .dot { width:8px;height:8px;border-radius:50%;background:#666; }
+    .badge.live .dot       { background:#ef4444;box-shadow:0 0 6px #ef4444;animation:pulse 1.5s infinite; }
+    .badge.connecting .dot { background:#60a5fa;animation:pulse 1s infinite; }
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .status          { font-size:13px;color:#666;flex:1; }
+    .status.ok       { color:#4ade80; }
+    .status.err      { color:#f87171; }
+    .status.loading  { color:#60a5fa; }
+
+    .viewer {
+      width:100%; max-width:700px;
+      background:#111; border-radius:8px; overflow:hidden;
+      position:relative; aspect-ratio:16/9;
+    }
+    #videoEl {
+      width:100%;height:100%;object-fit:contain;display:block;
+      background:#000;
+    }
+    .overlay {
+      position:absolute;inset:0;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:14px;
+      background:rgba(0,0,0,.85);
+    }
+    .overlay.hidden { display:none; }
+    .spinner{width:36px;height:36px;border:3px solid #222;border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite;}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .step-label { font-size:13px; color:#555; text-align:center; max-width:280px; line-height:1.5; }
+    .step-label.err { color:#f87171; }
+
+    .connect-btn {
+      padding: 10px 24px;
+      background: #1d4ed8; color: #fff;
+      border: none; border-radius: 8px;
+      font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: background .2s;
+    }
+    .connect-btn:hover { background: #2563eb; }
+    .connect-btn:disabled { background: #1e293b; color: #475569; cursor: default; }
+
+    .note {
+      width:100%;max-width:700px;font-size:12px;color:#444;
+      background:#111;border:1px solid #1e1e1e;border-radius:6px;
+      padding:10px 14px;line-height:1.6;
+    }
+    .note code{background:#1a1a1a;padding:1px 5px;border-radius:3px;color:#777;font-family:monospace;}
+    .note a { color: #3b82f6; text-decoration: none; }
+    .note a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="badge" id="badge"><span class="dot"></span><span id="badgeText">OFFLINE</span></div>
+    <span class="status" id="statusMsg">Appuyer sur Connecter pour démarrer</span>
+  </div>
+
+  <div class="viewer">
+    <video id="videoEl" autoplay playsinline muted></video>
+    <div id="overlay" class="overlay">
+      <button id="connectBtn" class="connect-btn">▶&nbsp; Connecter la caméra</button>
+      <span id="stepLabel" class="step-label">Connexion directe — app Im Cam non requise</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong style="color:#666">Mode :</strong> WebRTC direct — l'app Im Cam peut rester fermée.<br>
+    <strong style="color:#666">Lancer :</strong>
+    <code>cd ~/im-cam &amp;&amp; node cylan-webrtc-server.js</code><br>
+    <strong style="color:#666">Caméra :</strong> <code>2201240300028294</code>
+    &nbsp;·&nbsp; <a href="/api/status">statut API</a>
+  </div>
+
+  <script>
+    const badge      = document.getElementById('badge');
+    const badgeText  = document.getElementById('badgeText');
+    const statusMsg  = document.getElementById('statusMsg');
+    const videoEl    = document.getElementById('videoEl');
+    const overlayEl  = document.getElementById('overlay');
+    const connectBtn = document.getElementById('connectBtn');
+    const stepLabel  = document.getElementById('stepLabel');
+
+    // Spinner element (created once, added/removed as needed)
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+
+    let ws    = null;
+    let pc    = null;
+    let state = 'idle';
+
+    // ── UI helpers ───────────────────────────────────────────────────────────
+    function setStatus(s, msg) {
+      state = s;
+      statusMsg.textContent = msg;
+      statusMsg.className = 'status ' + (s === 'connected' ? 'ok' : s === 'error' ? 'err' : 'loading');
+      badge.className     = 'badge '  + (s === 'connected' ? 'live' : s === 'connecting' ? 'connecting' : '');
+      badgeText.textContent = s === 'connected' ? 'LIVE' : s === 'connecting' ? 'CONN...' : 'OFFLINE';
+    }
+
+    function showOverlaySpinner(label) {
+      if (!overlayEl.contains(spinner)) overlayEl.prepend(spinner);
+      connectBtn.style.display = 'none';
+      stepLabel.textContent    = label;
+      stepLabel.className      = 'step-label';
+      overlayEl.classList.remove('hidden');
+    }
+
+    function showOverlayButton(label, isError) {
+      if (overlayEl.contains(spinner)) overlayEl.removeChild(spinner);
+      connectBtn.style.display  = '';
+      connectBtn.disabled       = false;
+      connectBtn.textContent    = '▶  Reconnect';
+      stepLabel.textContent     = label;
+      stepLabel.className       = 'step-label' + (isError ? ' err' : '');
+      overlayEl.classList.remove('hidden');
+    }
+
+    function hideOverlay() {
+      overlayEl.classList.add('hidden');
+    }
+
+    // ── Start ────────────────────────────────────────────────────────────────
+    connectBtn.addEventListener('click', startConnection);
+
+    async function startConnection() {
+      if (state === 'connecting') return;
+      connectBtn.disabled = true;
+      setStatus('connecting', 'Connexion au serveur de signaling...');
+      showOverlaySpinner('Authentification Cylan...');
+
+      const wsUrl = 'ws://' + location.host + '/ws';
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        setStatus('connecting', 'Connecté — login Cylan...');
+        ws.send(JSON.stringify({ type: 'connect' }));
+      };
+
+      ws.onmessage = async (evt) => {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch { return; }
+        await handleServerMsg(msg);
+      };
+
+      ws.onerror = () => {
+        setStatus('error', 'Serveur local inaccessible');
+        showOverlayButton('Lancer : node cylan-webrtc-server.js', true);
+      };
+
+      ws.onclose = () => {
+        if (state !== 'idle') {
+          setStatus('error', 'Connexion au proxy perdue');
+          showOverlayButton('Connexion perdue — réessayer', true);
+        }
+      };
+    }
+
+    // ── Gestion des messages serveur ─────────────────────────────────────────
+    async function handleServerMsg(msg) {
+      if (msg.type === 'ready') {
+        setStatus('connecting', 'WebRTC — création de l\'offre...');
+        showOverlaySpinner('Négociation WebRTC...');
+        await createPeerConnection(msg.iceServers);
+
+      } else if (msg.type === 'answer') {
+        console.log('[webrtc] answer reçu');
+        try {
+          await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+        } catch (e) {
+          console.error('[webrtc] setRemoteDescription:', e.message);
+        }
+
+      } else if (msg.type === 'candidate') {
+        if (pc && msg.candidate) {
+          try {
+            await pc.addIceCandidate({
+              candidate:     msg.candidate,
+              sdpMid:        msg.sdpMid,
+              sdpMLineIndex: msg.sdpMLineIndex
+            });
+          } catch (e) {
+            console.warn('[ice] addIceCandidate:', e.message);
+          }
+        }
+
+      } else if (msg.type === 'switchVideo') {
+        console.log('[cylan] switchVideo — flux actif côté caméra');
+
+      } else if (msg.type === 'hangup') {
+        setStatus('idle', 'Appel terminé par la caméra');
+        showOverlayButton('La caméra a raccroché', false);
+        cleanupPc();
+
+      } else if (msg.type === 'error') {
+        setStatus('error', 'Erreur : ' + msg.message);
+        showOverlayButton(msg.message, true);
+        cleanupPc();
+      }
+    }
+
+    // ── WebRTC ───────────────────────────────────────────────────────────────
+    async function createPeerConnection(iceServers) {
+      cleanupPc();
+      pc = new RTCPeerConnection({ iceServers });
+
+      // Recevoir la vidéo et l'audio
+      pc.ontrack = (evt) => {
+        console.log('[webrtc] track reçu:', evt.track.kind);
+        if (evt.track.kind === 'video') {
+          videoEl.srcObject = evt.streams[0];
+          hideOverlay();
+          setStatus('connected', 'Flux en direct');
+        }
+      };
+
+      // Envoyer nos candidats ICE vers la caméra
+      pc.onicecandidate = (evt) => {
+        if (evt.candidate && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type:          'candidate',
+            candidate:     evt.candidate.candidate,
+            sdpMid:        evt.candidate.sdpMid,
+            sdpMLineIndex: evt.candidate.sdpMLineIndex
+          }));
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        console.log('[ice] state:', s);
+        if (s === 'connected' || s === 'completed') {
+          hideOverlay();
+          setStatus('connected', 'Flux en direct');
+        } else if (s === 'failed') {
+          setStatus('error', 'Connexion ICE échouée');
+          showOverlayButton('ICE échoué — réseau ou caméra inaccessible', true);
+        } else if (s === 'disconnected') {
+          setStatus('connecting', 'Reconnexion ICE...');
+        }
+      };
+
+      // Transceivers en réception seulement
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+
+      // Créer l'offre
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      console.log('[webrtc] offre SDP créée, envoi...');
+
+      ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp }));
+    }
+
+    function cleanupPc() {
+      if (pc) { pc.close(); pc = null; }
+      videoEl.srcObject = null;
+    }
+  </script>
+</body>
+</html>
