@@ -150,8 +150,7 @@ app.use('/freebox', createProxyMiddleware({
   }
 }));
 
-app.use(express.static(path.join(__dirname, 'public')));
-app.get('/',            (_req, res) => res.sendFile(path.join(__dirname, 'public', 'cylan.html')));
+app.use(express.static(path.join(__dirname, 'public'), { index: 'cylan.html' }));
 app.get('/api/status',  (_req, res) => res.json({
   ok:      true,
   device:  DEVICE_SN,
