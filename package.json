@@ -1,0 +1,13 @@
+{
+  "name": "im-cam-stream",
+  "version": "1.0.0",
+  "description": "Lecteur flux caméra IP Im Cam / My-Scan via RTSP → HLS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

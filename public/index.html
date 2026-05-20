@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Caméra Im Cam — Flux Live</title>
+  <link href="https://vjs.zencdn.net/8.6.1/video-js.css" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header {
+      width: 100%;
+      background: #1a1a1a;
+      border-bottom: 1px solid #2a2a2a;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    header h1 { font-size: 1.1rem; font-weight: 600; color: #fff; }
+
+    .badge {
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .badge.live  { background: #c0392b; color: #fff; }
+    .badge.wait  { background: #555; color: #ccc; }
+    .badge.error { background: #7d3c18; color: #f0b27a; }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px;
+      width: 100%;
+      max-width: 1000px;
+      gap: 20px;
+    }
+
+    .player-wrap {
+      width: 100%;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 4px 32px rgba(0,0,0,0.6);
+      background: #000;
+      aspect-ratio: 16/9;
+      position: relative;
+    }
+
+    #cam {
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    .overlay-msg {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: rgba(0,0,0,0.82);
+      color: #bbb;
+      font-size: 0.9rem;
+      z-index: 10;
+    }
+    .overlay-msg.hidden { display: none; }
+    .overlay-msg .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid #333;
+      border-top-color: #e74c3c;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .rtsp-input {
+      flex: 1;
+      min-width: 260px;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      color: #e0e0e0;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-family: monospace;
+    }
+    .rtsp-input:focus { outline: none; border-color: #e74c3c; }
+
+    button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: background 0.15s;
+    }
+    .btn-connect  { background: #c0392b; color: #fff; }
+    .btn-connect:hover  { background: #e74c3c; }
+    .btn-probe    { background: #2c3e50; color: #fff; }
+    .btn-probe:hover    { background: #34495e; }
+    .btn-stop     { background: #333; color: #aaa; }
+    .btn-stop:hover     { background: #444; }
+
+    .info-panel {
+      width: 100%;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 0.82rem;
+    }
+    .info-panel h2 { font-size: 0.88rem; color: #888; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .info-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #232323; }
+    .info-row:last-child { border: none; }
+    .info-label { color: #666; }
+    .info-value { color: #ccc; font-family: monospace; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Caméra Im Cam</h1>
+  <span id="badge" class="badge wait">EN ATTENTE</span>
+</header>
+
+<main>
+  <div class="player-wrap">
+    <video id="cam" class="video-js vjs-default-skin" muted playsinline></video>
+    <div id="overlay" class="overlay-msg">
+      <div class="spinner"></div>
+      <span id="overlay-text">Connexion au flux…</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <input id="rtsp-url" class="rtsp-input" type="text"
+           placeholder="rtsp://admin:admin@192.168.1.150:554/stream"
+           title="URL RTSP complète">
+    <button class="btn-connect" onclick="connectCustom()">Connecter</button>
+    <button class="btn-probe"   onclick="probe()">Essai suivant</button>
+    <button class="btn-stop"    onclick="stopStream()">Arrêter</button>
+  </div>
+
+  <div class="info-panel">
+    <h2>Informations</h2>
+    <div class="info-row">
+      <span class="info-label">IP caméra</span>
+      <span class="info-value" id="inf-ip">192.168.1.150</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">URL RTSP utilisée</span>
+      <span class="info-value" id="inf-rtsp">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Flux HLS</span>
+      <span class="info-value" id="inf-hls">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Statut</span>
+      <span class="info-value" id="inf-status">Initialisation…</span>
+    </div>
+  </div>
+</main>
+
+<script src="https://vjs.zencdn.net/8.6.1/video.min.js"></script>
+<script>
+  const player = videojs("cam", {
+    liveui: true,
+    controls: true,
+    autoplay: true,
+    preload: "auto",
+    html5: { vhs: { overrideNative: true } },
+  });
+
+  let pollTimer = null;
+  let playerLoaded = false;
+
+  function setStatus(ready, rtspUrl, hlsUrl) {
+    const badge = document.getElementById("badge");
+    const overlay = document.getElementById("overlay");
+    const overlayText = document.getElementById("overlay-text");
+
+    document.getElementById("inf-rtsp").textContent = rtspUrl || "—";
+    document.getElementById("inf-hls").textContent  = hlsUrl  || "—";
+
+    if (ready && hlsUrl) {
+      badge.className = "badge live";
+      badge.textContent = "LIVE";
+      document.getElementById("inf-status").textContent = "Flux actif";
+
+      if (!playerLoaded) {
+        playerLoaded = true;
+        player.src({ type: "application/x-mpegURL", src: hlsUrl });
+        player.play().catch(() => {});
+      }
+
+      overlay.classList.add("hidden");
+    } else {
+      badge.className = "badge wait";
+      badge.textContent = "EN ATTENTE";
+      document.getElementById("inf-status").textContent = "En attente du flux HLS…";
+      overlayText.textContent = rtspUrl
+        ? "FFmpeg encode le flux RTSP, patienter…"
+        : "En attente de connexion RTSP…";
+      overlay.classList.remove("hidden");
+    }
+  }
+
+  function poll() {
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then(({ ready, rtspUrl, hlsUrl }) => {
+        setStatus(ready, rtspUrl, hlsUrl);
+        if (!ready) schedPoll(3000);
+        else schedPoll(10000); // polling moins fréquent une fois live
+      })
+      .catch(() => {
+        document.getElementById("inf-status").textContent = "Serveur inaccessible";
+        schedPoll(5000);
+      });
+  }
+
+  function schedPoll(ms) {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, ms);
+  }
+
+  function connectCustom() {
+    const url = document.getElementById("rtsp-url").value.trim();
+    if (!url) { alert("Entrez une URL RTSP."); return; }
+    playerLoaded = false;
+    player.pause();
+    fetch("/api/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rtspUrl: url }),
+    }).then(() => schedPoll(1500));
+  }
+
+  function probe() {
+    playerLoaded = false;
+    player.pause();
+    document.getElementById("inf-status").textContent = "Test du prochain chemin RTSP…";
+    fetch("/api/probe", { method: "POST" }).then(() => schedPoll(3000));
+  }
+
+  function stopStream() {
+    playerLoaded = false;
+    player.pause();
+    fetch("/api/stop", { method: "POST" }).then(() => {
+      setStatus(false, null, null);
+    });
+  }
+
+  // Forcer rechargement si le flux se coupe côté player
+  player.on("error", () => {
+    playerLoaded = false;
+    schedPoll(3000);
+  });
+
+  poll();
+</script>
+</body>
+</html>
