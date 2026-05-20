@@ -1,5 +1,24 @@
+// Charger .env avant tout le reste
+(function loadDotenv() {
+  const fs = require("fs"), path = require("path");
+  const envFile = path.join(__dirname, ".env");
+  if (!fs.existsSync(envFile)) return;
+  fs.readFileSync(envFile, "utf8").split("\n").forEach((line) => {
+    line = line.trim();
+    if (!line || line.startsWith("#")) return;
+    const eq = line.indexOf("=");
+    if (eq < 1) return;
+    const key = line.slice(0, eq).trim();
+    if (key in process.env) return; // les exports shell ont priorité
+    let val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))
+      val = val.slice(1, -1);
+    process.env[key] = val;
+  });
+})();
+
 const express = require("express");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const config = require("./config");
@@ -7,6 +26,24 @@ const { startTunnel, stopTunnel } = require("./tunnel");
 
 const app = express();
 const HLS_DIR = config.server.hlsDir;
+
+// Résoudre le chemin complet de ffmpeg (Homebrew Intel + Apple Silicon + PATH)
+function findFfmpeg() {
+  const candidates = [
+    "/opt/homebrew/bin/ffmpeg",  // Apple Silicon
+    "/usr/local/bin/ffmpeg",     // Intel Mac
+    "ffmpeg",                    // PATH
+  ];
+  for (const p of candidates) {
+    try { execSync(`"${p}" -version`, { stdio: "ignore" }); return p; } catch (_) {}
+  }
+  return null;
+}
+const FFMPEG = findFfmpeg();
+if (!FFMPEG) {
+  console.error("[server] ERREUR : ffmpeg introuvable. Installer avec : brew install ffmpeg");
+  process.exit(1);
+}
 
 // État du processus FFmpeg
 let publicUrl = null;   // URL du tunnel si actif
@@ -59,7 +96,14 @@ function startStream(rtspUrl) {
   ];
 
   console.log(`[stream] Connexion à ${rtspUrl.replace(/:([^@]+)@/, ":*****@")}`);
-  ffmpegProc = spawn("ffmpeg", args);
+  ffmpegProc = spawn(FFMPEG, args);
+
+  ffmpegProc.on("error", (err) => {
+    console.error(`[ffmpeg] Impossible de démarrer ffmpeg : ${err.message}`);
+    streamReady = false;
+    ffmpegProc = null;
+    restartTimer = setTimeout(() => startStream(currentRtspUrl), 5000);
+  });
 
   ffmpegProc.stderr.on("data", (d) => {
     const msg = d.toString().trim();
@@ -166,7 +210,7 @@ app.use(express.static(path.join(__dirname, "public")));
 // ── Démarrage ─────────────────────────────────────────────────────────────
 
 const PORT = config.server.port;
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async () => {
   console.log(`[server] Serveur démarré sur http://localhost:${PORT}`);
   console.log(`[server] Caméra cible : ${config.camera.ip}:${config.camera.rtspPort}`);
 
@@ -197,6 +241,16 @@ app.listen(PORT, async () => {
 
   // Lancer le flux automatiquement au démarrage
   startStream(getRtspUrl(0));
+});
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`[server] ERREUR : le port ${PORT} est déjà utilisé.`);
+    console.error(`[server] Changer avec : PORT=8001 ./start.sh`);
+  } else {
+    console.error(`[server] Erreur réseau : ${err.message}`);
+  }
+  process.exit(1);
 });
 
 process.on("SIGINT",  () => { stopStream(); stopTunnel(); process.exit(0); });
