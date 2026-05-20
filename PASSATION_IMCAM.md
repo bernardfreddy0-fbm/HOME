@@ -1,225 +1,341 @@
-# Passation — Intégration caméra Im Cam sur plateforme web
+# Dossier de passation — Im Cam sur Mac
 
+**Projet :** Affichage du flux vidéo de la caméra IP Im Cam dans un navigateur  
 **Date :** 2026-05-20  
-**Objectif :** Récupérer le flux vidéo de la caméra IP et l'afficher sur une plateforme web  
-**À réaliser sur :** Mac connecté au réseau local Freebox (192.168.1.x)
+**Destinataire :** Technicien Mac / administrateur du site
 
 ---
 
-## Informations de la caméra
+## Vue d'ensemble
 
-| Élément | Valeur |
-|--------|--------|
-| IP locale | `192.168.1.150` |
-| Numéro de série | `2201240300028294` |
-| Adresse MAC | `C8:FE:0F:35:24:6D` |
-| Application | Im Cam / My-Scan |
-| Réseau | Freebox — réseau local |
+Ce projet installe un petit serveur local sur le Mac qui :
 
----
+1. Se connecte à la caméra IP (`192.168.1.150`) via le protocole RTSP
+2. Convertit le flux vidéo au format HLS (lisible dans tout navigateur)
+3. Affiche le flux dans une interface web accessible sur `http://localhost:8000`
+4. Peut exposer cette interface sur internet via un tunnel sécurisé (Cloudflare)
 
-## Prérequis sur le Mac
-
-Ouvrir le Terminal et installer les outils nécessaires :
-
-```bash
-# Installer Homebrew si pas déjà fait
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Installer les outils
-brew install nmap ffmpeg
+```
+Caméra Im Cam ──RTSP──▶ FFmpeg (sur le Mac) ──HLS──▶ Navigateur web
+192.168.1.150                                          localhost:8000
 ```
 
 ---
 
-## Étape 1 — Vérifier que la caméra est accessible
+## Ce qu'il faut préparer avant d'intervenir
+
+| Élément | Valeur |
+|---------|--------|
+| IP de la caméra | `192.168.1.150` |
+| Identifiants caméra | `admin` / `admin` (à vérifier) |
+| Réseau | Freebox — réseau local 192.168.1.x |
+| Accès Mac | Compte administrateur |
+| Connexion internet | Requise pour l'installation |
+
+---
+
+## Étape 1 — Ouvrir le Terminal
+
+Sur le Mac : `Cmd + Espace` → taper `Terminal` → Entrée
+
+Toutes les commandes ci-dessous se tapent dans ce Terminal.
+
+---
+
+## Étape 2 — Installer Homebrew (gestionnaire de paquets)
+
+Vérifier s'il est déjà installé :
+
+```bash
+brew --version
+```
+
+Si la commande renvoie une version → **passer à l'étape 3**.
+
+Sinon, installer Homebrew :
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Le script demande le mot de passe administrateur. Suivre les instructions à l'écran.
+
+> Sur Mac Apple Silicon (M1/M2/M3), à la fin de l'installation Homebrew affiche
+> deux lignes à copier-coller pour ajouter Homebrew au PATH. **Ne pas les ignorer.**
+
+---
+
+## Étape 3 — Installer Node.js et FFmpeg
+
+```bash
+brew install node ffmpeg
+```
+
+Durée estimée : 5 à 15 minutes selon la connexion.
+
+Vérification :
+
+```bash
+node --version    # doit afficher v18.x ou supérieur
+ffmpeg -version   # doit afficher ffmpeg version 6.x ou supérieur
+```
+
+---
+
+## Étape 4 — Récupérer le code
+
+```bash
+cd ~
+git clone https://github.com/bernardfreddy0-fbm/HOME.git im-cam
+cd im-cam
+git checkout claude/vigorous-borg-3e7526
+```
+
+---
+
+## Étape 5 — Configurer la caméra
+
+```bash
+cp .env.example .env
+open -e .env
+```
+
+L'éditeur TextEdit s'ouvre. Vérifier et adapter ces lignes :
+
+```
+CAMERA_IP=192.168.1.150
+CAMERA_USER=admin
+CAMERA_PASS=admin
+```
+
+Sauvegarder (`Cmd + S`) et fermer TextEdit.
+
+> Si les identifiants `admin`/`admin` ne fonctionnent pas, essayer :
+> `admin`/`12345`, `admin`/`password`, ou consulter l'étiquette sous la caméra.
+
+---
+
+## Étape 6 — Premier lancement
+
+```bash
+./start.sh
+```
+
+Le navigateur s'ouvre automatiquement sur `http://localhost:8000` après 2 secondes.
+
+**Ce que vous devez voir dans le Terminal :**
+
+```
+────────────────────────────────────────
+  Im Cam — Lecteur flux caméra IP
+────────────────────────────────────────
+  Interface : http://localhost:8000
+  Arrêter   : Ctrl+C
+────────────────────────────────────────
+
+[server] Serveur démarré sur http://localhost:8000
+[server] Caméra cible : 192.168.1.150:554
+[stream] Connexion à rtsp://admin:*****@192.168.1.150:554/stream
+[stream] Flux HLS prêt.
+```
+
+**Ce que vous devez voir dans le navigateur :**
+
+- Badge **LIVE** en rouge en haut à gauche
+- Image vidéo de la caméra
+
+---
+
+## Étape 7 — Si le flux ne s'affiche pas
+
+### 7a. Vérifier que la caméra est joignable
 
 ```bash
 ping -c 4 192.168.1.150
 ```
 
-Résultat attendu : réponses sans perte de paquets.
+→ Si aucune réponse : la caméra est éteinte ou sur un autre réseau.  
+→ Vérifier que le Mac est bien connecté au Wi-Fi de la Freebox (pas un partage de connexion).
 
----
-
-## Étape 2 — Scanner les ports de la caméra
+### 7b. Scanner les ports de la caméra
 
 ```bash
 nmap -sV 192.168.1.150
 ```
 
-**Noter les ports ouverts** et les noter ici pour la suite :
+→ Si le port `554` n'apparaît pas : la caméra n'accepte pas RTSP sur ce port.
 
-| Port | Statut | Service détecté |
-|------|--------|----------------|
-| 554  | ?      | RTSP           |
-| 80   | ?      | HTTP (interface web) |
-| 8080 | ?      | HTTP alternatif |
-| 8554 | ?      | RTSP alternatif |
-| 34567| ?      | Protocole propriétaire |
+### 7c. Essayer les autres chemins RTSP
+
+Dans l'interface web (`http://localhost:8000`), cliquer **"Essai suivant"** plusieurs fois.
+Le bouton teste automatiquement ces chemins :
+
+| # | Chemin testé |
+|---|-------------|
+| 1 | `/stream` |
+| 2 | `/live/ch0` |
+| 3 | `/live/main` |
+| 4 | `/h264/ch1/main/av_stream` |
+| 5 | `/cam/realmonitor?channel=1&subtype=0` |
+| 6 | `/videoMain` |
+
+### 7d. Saisir manuellement l'URL RTSP
+
+Si vous connaissez l'URL exacte (trouvée dans l'app Im Cam / Wireshark) :
+
+1. La coller dans le champ texte en haut de la page
+2. Cliquer **Connecter**
 
 ---
 
-## Étape 3 — Tester l'interface web de la caméra
+## Étape 8 — Accès depuis l'extérieur du réseau (optionnel)
 
-Ouvrir dans Safari ou Chrome :
-
-```
-http://192.168.1.150
-http://192.168.1.150:8080
-```
-
-Si une page s'affiche → noter identifiants demandés (essayer `admin` / `admin` ou `admin` / vide)
-
----
-
-## Étape 4 — Tester le flux RTSP
-
-Installer VLC : https://www.videolan.org/vlc/
-
-Puis dans VLC → Fichier → Ouvrir un flux réseau, tester ces URLs une par une :
-
-```
-rtsp://admin:admin@192.168.1.150:554/stream
-rtsp://admin:admin@192.168.1.150:554/live/ch0
-rtsp://admin:admin@192.168.1.150:554/live/main
-rtsp://admin:admin@192.168.1.150:554/h264/ch1/main/av_stream
-rtsp://admin:@192.168.1.150:554/stream
-rtsp://192.168.1.150:554/stream
-```
-
-Ou via le Terminal avec ffplay :
+### Prérequis
 
 ```bash
-ffplay "rtsp://admin:admin@192.168.1.150:554/stream"
+brew install cloudflared
 ```
 
-**Noter l'URL qui fonctionne.**
+### Lancer avec accès distant
 
----
+Modifier le `.env` :
 
-## Étape 5 — Analyser le trafic réseau (si RTSP non trouvé)
+```
+TUNNEL=cloudflared
+AUTH_USER=prenom
+AUTH_PASS=motdepasse_solide
+```
 
-Si aucune URL RTSP ne fonctionne, analyser le trafic pendant que l'app Im Cam est ouverte :
+Puis :
 
 ```bash
-# Installer Wireshark
-brew install --cask wireshark
-
-# Ou capturer en ligne de commande
-sudo tcpdump -i en0 host 192.168.1.150 -w capture_imcam.pcap
+./start.sh
 ```
 
-Ouvrir ensuite `capture_imcam.pcap` dans Wireshark et filtrer :
+Le Terminal affiche une URL publique de la forme :
+
 ```
-ip.addr == 192.168.1.150
+────────────────────────────────────────────────────────────
+  Accès distant : https://xyz-abc-123.trycloudflare.com
+  Identifiant   : prenom
+  Mot de passe  : motdepasse_solide
+────────────────────────────────────────────────────────────
 ```
 
-Chercher des URLs ou protocoles dans les paquets.
+Cette URL est accessible depuis n'importe où dans le monde, sur mobile ou ordinateur.
+
+> **Important :** l'URL change à chaque redémarrage du serveur.
+> Pour une URL fixe, créer un compte gratuit sur [cloudflare.com](https://www.cloudflare.com)
+> et configurer un tunnel nommé.
 
 ---
 
-## Étape 6 — Lancer le flux HLS pour la plateforme web
+## Étape 9 — Lancer automatiquement au démarrage du Mac (optionnel)
 
-Une fois l'URL RTSP identifiée, lancer FFmpeg pour convertir en HLS :
+Créer un fichier LaunchAgent :
 
 ```bash
-# Créer le dossier de sortie
-mkdir -p ~/stream
-
-# Lancer FFmpeg (remplacer l'URL RTSP par celle trouvée à l'étape 4)
-ffmpeg -i "rtsp://admin:admin@192.168.1.150:554/stream" \
-  -c:v copy \
-  -f hls \
-  -hls_time 2 \
-  -hls_list_size 3 \
-  -hls_flags delete_segments \
-  ~/stream/cam.m3u8
+mkdir -p ~/Library/LaunchAgents
+cat > ~/Library/LaunchAgents/com.imcam.stream.plist << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.imcam.stream</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>cd ~/im-cam && ./start.sh >> ~/im-cam/imcam.log 2>&1</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/imcam-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/imcam-stderr.log</string>
+</dict>
+</plist>
+EOF
 ```
 
-Laisser FFmpeg tourner en arrière-plan.
-
----
-
-## Étape 7 — Tester l'affichage HTML
-
-Créer un fichier `test_cam.html` sur le bureau :
-
-```html
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <title>Test Caméra Im Cam</title>
-  <link href="https://vjs.zencdn.net/8.0.4/video-js.css" rel="stylesheet">
-  <style>
-    body { background: #111; display: flex; justify-content: center; 
-           align-items: center; height: 100vh; margin: 0; }
-  </style>
-</head>
-<body>
-  <video id="cam" class="video-js vjs-default-skin vjs-big-play-centered"
-         controls autoplay muted width="854" height="480" data-setup='{"liveui":true}'>
-    <source src="cam.m3u8" type="application/x-mpegURL">
-    <p>Votre navigateur ne supporte pas la lecture vidéo.</p>
-  </video>
-
-  <script src="https://vjs.zencdn.net/8.0.4/video.min.js"></script>
-  <script>
-    const player = videojs('cam');
-    // Rechargement automatique toutes les 10 secondes si flux coupé
-    setInterval(() => {
-      if (player.paused()) player.play();
-    }, 10000);
-  </script>
-</body>
-</html>
-```
-
-Ouvrir un serveur local pour tester :
+Activer :
 
 ```bash
-cd ~/stream
-python3 -m http.server 8000
+launchctl load ~/Library/LaunchAgents/com.imcam.stream.plist
 ```
 
-Puis ouvrir dans le navigateur : `http://localhost:8000/test_cam.html`
-
----
-
-## Résultats à transmettre
-
-Après les tests, remplir ce tableau et partager :
-
-| Étape | Résultat |
-|-------|---------|
-| Ping caméra | ✅ / ❌ |
-| Ports ouverts (nmap) | _(liste)_ |
-| Interface web accessible | ✅ / ❌ — URL : |
-| URL RTSP qui fonctionne | _(URL)_ |
-| Flux HLS généré | ✅ / ❌ |
-| Affichage dans navigateur | ✅ / ❌ |
-
----
-
-## En cas de problème
-
-**Caméra ne répond pas au ping :**
-- Vérifier que le Mac est bien sur le réseau 192.168.1.x
-- Vérifier que la caméra est allumée et connectée à la Freebox
-
-**Aucune URL RTSP ne fonctionne :**
-- Essayer avec différents identifiants : `admin/12345`, `admin/password`, `root/root`
-- Passer à l'analyse Wireshark (Étape 5)
-
-**FFmpeg s'arrête :**
-- Vérifier les identifiants dans l'URL RTSP
-- Essayer d'ajouter `-rtsp_transport tcp` avant le `-i`
+Vérifier :
 
 ```bash
-ffmpeg -rtsp_transport tcp -i "rtsp://admin:admin@192.168.1.150:554/stream" ...
+launchctl list | grep imcam
+# doit afficher une ligne avec com.imcam.stream
+```
+
+Désactiver si besoin :
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.imcam.stream.plist
 ```
 
 ---
 
-*Document généré le 2026-05-20 — Projet Im Cam → Plateforme web*
+## Commandes utiles au quotidien
+
+| Action | Commande |
+|--------|----------|
+| Démarrer | `cd ~/im-cam && ./start.sh` |
+| Arrêter | `Ctrl+C` dans le Terminal |
+| Voir les logs | `cat /tmp/imcam-stdout.log` |
+| Changer la config | `open -e ~/im-cam/.env` |
+| Mettre à jour le code | `cd ~/im-cam && git pull` |
+| Ouvrir l'interface | `open http://localhost:8000` |
+
+---
+
+## Structure des fichiers
+
+```
+~/im-cam/
+├── .env               ← Configuration (identifiants, tunnel…)
+├── .env.example       ← Template de configuration
+├── server.js          ← Serveur Node.js (FFmpeg + API + HLS)
+├── tunnel.js          ← Module tunnel Cloudflare
+├── config.js          ← Lecture des variables d'environnement
+├── start.sh           ← Script de démarrage
+├── package.json       ← Dépendances Node.js
+└── public/
+    └── index.html     ← Interface web Video.js
+```
+
+---
+
+## Dépannage rapide
+
+| Symptôme | Cause probable | Solution |
+|----------|---------------|----------|
+| `ERREUR : ffmpeg introuvable` | ffmpeg pas installé | `brew install ffmpeg` |
+| `ERREUR : le port 8000 est déjà utilisé` | Autre service sur ce port | `PORT=8001 ./start.sh` |
+| Spinner infini dans le navigateur | URL RTSP incorrecte | Cliquer "Essai suivant" |
+| `Connection refused` sur l'URL RTSP | Mauvais identifiants | Vérifier `CAMERA_PASS` dans `.env` |
+| Page blanche dans le navigateur | Serveur pas démarré | Relancer `./start.sh` |
+| Tunnel ne démarre pas | cloudflared absent | `brew install cloudflared` |
+
+---
+
+## Contacts et ressources
+
+| Ressource | Lien |
+|-----------|------|
+| Code source | `https://github.com/bernardfreddy0-fbm/HOME` (branche `claude/vigorous-borg-3e7526`) |
+| Documentation FFmpeg | `https://ffmpeg.org/documentation.html` |
+| Cloudflare Tunnel | `https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/` |
+| Homebrew | `https://brew.sh` |
+
+---
+
+*Document généré le 2026-05-20*
