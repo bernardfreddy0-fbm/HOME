@@ -163,13 +163,15 @@
     .tab-btn.active { color:var(--blue); border-bottom-color:var(--blue); }
 
     /* ── Freebox panel ── */
+    /* Absolu sur #main pour ne pas masquer la vidéo (WebRTC continue) */
+    #main { position:relative; }
     #freeboxPanel {
-      display:none; flex:1; overflow:hidden;
+      display:none; position:absolute; inset:0; z-index:5;
+      background:#fff;
     }
     #freeboxPanel.visible { display:flex; }
     #freeboxFrame {
       flex:1; border:none; width:100%; height:100%;
-      background:#fff;
     }
 
     /* ── Note bar ── */
@@ -415,13 +417,20 @@ async function handleMsg(msg) {
       }
       break;
 
+    case 'reconnecting':
+      setStatus('connecting', 'Reconnexion Cylan…');
+      showSpinner('Reconnexion automatique…');
+      cleanupPc(); connected=false; enableControls(false);
+      break;
+
     case 'switchVideo':
-      // La caméra confirme que la vidéo est active
+      // La caméra signale un changement de flux — pas d'action nécessaire
       break;
 
     case 'hangup':
-      setStatus('idle', 'Appel terminé');
-      showConnectBtn('La caméra a raccroché', false);
+      // La caméra a raccroché — reconnexion automatique dans 3s
+      setStatus('connecting', 'Reconnexion…');
+      showSpinner('La caméra a raccroché, reconnexion…');
       cleanupPc(); connected=false; enableControls(false);
       break;
 
@@ -656,14 +665,13 @@ let freeboxLoaded = false;
 tabCam.addEventListener('click', () => {
   tabCam.classList.add('active');
   tabFreebox.classList.remove('active');
-  mainPanel.style.display   = 'flex';
   freeboxPanel.classList.remove('visible');
+  // NE PAS masquer mainPanel — la vidéo WebRTC doit rester active
 });
 
 tabFreebox.addEventListener('click', () => {
   tabFreebox.classList.add('active');
   tabCam.classList.remove('active');
-  mainPanel.style.display   = 'none';
   freeboxPanel.classList.add('visible');
   // Charger l'iframe seulement au premier clic (lazy load)
   if (!freeboxLoaded) {

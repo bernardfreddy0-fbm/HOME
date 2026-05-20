@@ -137,7 +137,9 @@ app.use('/freebox', createProxyMiddleware({
       stream.on('data', c => chunks.push(c));
       stream.on('end', () => {
         let html = Buffer.concat(chunks).toString('utf8');
-        // Injecter patch avant </head>
+        // <base href> corrige les chemins relatifs CSS/JS (style.css, app.js…)
+        html = html.replace('<head>', '<head>\n<base href="/freebox/">');
+        // Patch fetch pour les appels API avec chemin absolu (/api/…)
         html = html.replace('</head>', FETCH_PATCH + '</head>');
         res.setHeader('content-length', Buffer.byteLength(html));
         res.end(html);
@@ -265,8 +267,18 @@ wss.on('connection', (browser, req) => {
       } catch (e) { console.error('[cylan] parse:', e.message); }
     });
 
-    cylan.on('close',  (c, r) => { ready = false; toBrowser({ type: 'error', message: 'Cylan déconnecté' }); });
-    cylan.on('error',  (e)    => { toBrowser({ type: 'error', message: e.message }); });
+    cylan.on('close', (code) => {
+      ready = false;
+      console.log('[cylan] déconnecté (code', code + '), reconnexion dans 3s…');
+      toBrowser({ type: 'reconnecting' });
+      // Reconnexion automatique si le navigateur est encore là
+      setTimeout(() => {
+        if (browser.readyState === WebSocket.OPEN) {
+          connectCylan().catch(e => toBrowser({ type: 'error', message: e.message }));
+        }
+      }, 3000);
+    });
+    cylan.on('error', (e) => { console.error('[cylan] erreur:', e.message); });
   }
 
   // ── Messages du navigateur ───────────────────────────────────────────────
