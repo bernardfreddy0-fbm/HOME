@@ -1,6 +1,5 @@
-// cylan-webrtc-server.js
-// Proxy de signaling WebRTC entre le navigateur et les serveurs Cylan
-// Sans l'app Im Cam — connexion directe à la caméra
+// cylan-webrtc-server.js  v2
+// Proxy de signaling WebRTC Cylan — contrôles PTZ, qualité, audio, snapshot
 // Usage : PORT=8002 node cylan-webrtc-server.js
 
 'use strict';
@@ -9,130 +8,145 @@ const WebSocket = require('ws');
 const http      = require('http');
 const express   = require('express');
 const path      = require('path');
+const crypto    = require('crypto');
 
 const PORT       = parseInt(process.env.PORT || '8002', 10);
-const CYLAN_IM   = 'wss://fde.jfgou.com:443/im';    // WebRTC signaling
-const CYLAN_FAST = 'wss://fde.jfgou.com:443/fast';  // Authentification
+const CYLAN_IM   = 'wss://fde.jfgou.com:443/im';
+const CYLAN_FAST = 'wss://fde.jfgou.com:443/fast';
 
-// Le serveur Cylan exige un Origin reconnu pour accepter les connexions WebSocket
+// Le serveur Cylan exige un Origin reconnu
 const WS_OPTS = {
   rejectUnauthorized: false,
   headers: { Origin: 'https://fast.jfgou.com' }
 };
 
-// ── Identifiants ─────────────────────────────────────────────────────────────
-// sessid : token de session (renouvelé automatiquement à chaque démarrage)
-let SESSID       = '0001desabbg17ZYRl32yklhooEGY6cF30A39'; // mis à jour au login
-const SECRET     = 'e2a6239f51a23e9a10acb6a020b800df';      // dérivé de l'aes_key serveur
-const DEVICE_SN  = '2201240300028294';                       // N° de série caméra
-const PERMIT_CODE = 'MAMTBNaTT1PC';                         // code d'accès caméra
+// ── Identifiants ──────────────────────────────────────────────────────────────
+let SESSID        = process.env.CYLAN_SESSID  || '0001desabbg17ZYRl32yklhooEGY6cF30A39';
+const SECRET      = process.env.CYLAN_SECRET  || 'e2a6239f51a23e9a10acb6a020b800df';
+const DEVICE_SN   = process.env.DEVICE_SN     || '2201240300028294';
+const PERMIT_CODE = process.env.PERMIT_CODE   || 'MAMTBNaTT1PC';
+const ACCOUNT     = process.env.CYLAN_ACCOUNT || 'bernard.freddy0@gmail.com';
+const PASSWD_MD5  = process.env.CYLAN_PASSWD  || '0f7c3b3c2462ff22f2854aea59aecbbc';
+const VKEY        = 'DcWP670PNfCtPIETQk03lEzbt6qRDRDy';
+const UDID        = '37D52478-3F85-4493-BC7E-BC772124783C';
 
-// Identifiants de connexion (pour renouveler le sessid)
-const ACCOUNT    = 'bernard.freddy0@gmail.com';
-const PASSWD_MD5 = '0f7c3b3c2462ff22f2854aea59aecbbc'; // MD5 du mot de passe
-const VKEY       = 'DcWP670PNfCtPIETQk03lEzbt6qRDRDy';
-const UDID       = '37D52478-3F85-4493-BC7E-BC772124783C';
+// Clé API optionnelle pour protéger l'accès public (env ACCESS_KEY)
+const ACCESS_KEY = process.env.ACCESS_KEY || null;
 
-let _reqCounter = 1;
-function reqId() { return `node_${Date.now()}_${_reqCounter++}`; }
+let _rc = 1;
+function reqId() { return `node_${Date.now()}_${_rc++}`; }
 
-// ── Connexion au serveur Fast (login) ────────────────────────────────────────
+// ── Login ─────────────────────────────────────────────────────────────────────
 function loginToFast() {
   return new Promise((resolve, reject) => {
-    console.log('[login] connexion à', CYLAN_FAST);
     const ws = new WebSocket(CYLAN_FAST, WS_OPTS);
-    const timeout = setTimeout(() => { ws.terminate(); reject(new Error('login timeout')); }, 12000);
+    const t  = setTimeout(() => { ws.terminate(); reject(new Error('login timeout')); }, 12000);
 
     ws.on('open', () => {
-      const msg = JSON.stringify({
-        headers: {
-          id: 'cli_login',
-          req_id: reqId(),
-          time: Math.floor(Date.now() / 1000)
-        },
+      ws.send(JSON.stringify({
+        headers: { id: 'cli_login', req_id: reqId(), time: Math.floor(Date.now() / 1000) },
         body: {
           os: 0, sys_version: '26.2', type: 0,
           vkey: VKEY, udid: UDID,
-          device_token: '', name: '', sessid: '',
-          net: 5, account: ACCOUNT,
+          device_token: '', name: '', sessid: '', net: 5,
+          account: ACCOUNT,
           bundle_id: 'com.cylan.chatcam', version: '2.33.3',
           model: 'iPad Pro 12.9 inch 3nd gen',
           screen_size: '375*667', language_type: 6,
           passwd: PASSWD_MD5, vid: '0001', simple_passwd: true
         }
-      });
-      ws.send(msg);
+      }));
     });
 
     ws.on('message', (data) => {
       try {
-        const arr = JSON.parse(data.toString());
-        // Le serveur envoie un tableau JSON
+        const arr  = JSON.parse(data.toString());
         const msgs = Array.isArray(arr) ? arr : [arr];
         for (const msg of msgs) {
           if (msg.headers?.id === 'cli_login_rsp') {
-            clearTimeout(timeout);
-            ws.close();
-            if (msg.ret === 0) {
-              console.log('[login] succès, sessid:', msg.body.sessid);
-              resolve(msg.body.sessid);
-            } else {
-              reject(new Error(`Login échoué: ${msg.msg}`));
-            }
+            clearTimeout(t); ws.close();
+            if (msg.ret === 0) resolve(msg.body.sessid);
+            else reject(new Error(`Login échoué: ${msg.msg}`));
             return;
           }
         }
-      } catch (e) { /* ignorer messages malformés */ }
+      } catch {}
     });
-
-    ws.on('error', (e) => { clearTimeout(timeout); reject(e); });
+    ws.on('error', (e) => { clearTimeout(t); reject(e); });
   });
 }
 
-// ── Serveur Express ───────────────────────────────────────────────────────────
+// ── Express ───────────────────────────────────────────────────────────────────
 const app = express();
+
+// Middleware clé API optionnelle
+app.use((req, res, next) => {
+  if (!ACCESS_KEY) return next();
+  const k = req.query.key || req.headers['x-access-key'];
+  if (k === ACCESS_KEY) return next();
+  // Autoriser la page HTML principale sans clé (elle l'enverra ensuite via WS)
+  if (req.path === '/' || req.path.endsWith('.html') || req.path.endsWith('.css') || req.path.endsWith('.js')) return next();
+  res.status(401).json({ error: 'Clé API invalide' });
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/',          (_req, res) => res.sendFile(path.join(__dirname, 'public', 'cylan.html')));
-app.get('/api/status', (_req, res) => res.json({ ok: true, device: DEVICE_SN, port: PORT }));
+app.get('/',            (_req, res) => res.sendFile(path.join(__dirname, 'public', 'cylan.html')));
+app.get('/api/status',  (_req, res) => res.json({
+  ok:      true,
+  device:  DEVICE_SN,
+  port:    PORT,
+  secured: !!ACCESS_KEY
+}));
 
 const httpServer = http.createServer(app);
-const wss = new WebSocket.Server({ server: httpServer, path: '/ws' });
+const wss        = new WebSocket.Server({ server: httpServer, path: '/ws' });
 
-// ── Connexion navigateur ──────────────────────────────────────────────────────
-wss.on('connection', (browser) => {
-  console.log('[browser] connecté');
-  let cylan   = null;
-  let sid     = null;
-  let ready   = false;
-
-  function toBrowser(obj) {
-    if (browser.readyState === WebSocket.OPEN) {
-      browser.send(JSON.stringify(obj));
+// ── Session navigateur ────────────────────────────────────────────────────────
+wss.on('connection', (browser, req) => {
+  // Vérification clé API via query string au moment de la connexion WS
+  if (ACCESS_KEY) {
+    const url = new URL(req.url, `http://localhost`);
+    if (url.searchParams.get('key') !== ACCESS_KEY) {
+      browser.close(4401, 'Clé API invalide');
+      return;
     }
   }
 
-  // ── Connexion au serveur de signaling Cylan ────────────────────────────────
-  async function connectCylan() {
-    // Renouveler le sessid au démarrage
-    try {
-      SESSID = await loginToFast();
-    } catch (e) {
-      console.warn('[login] impossible, utilisation du sessid en cache:', e.message);
-    }
+  console.log('[browser] connecté depuis', req.socket.remoteAddress);
 
-    console.log('[cylan] connexion à', CYLAN_IM);
+  let cylan = null;
+  let sid   = null;
+  let ready = false;
+
+  function toBrowser(obj) {
+    if (browser.readyState === WebSocket.OPEN) browser.send(JSON.stringify(obj));
+  }
+
+  // ── Construction d'un message Cylan ─────────────────────────────────────
+  function cylanMsg(messageType, payload) {
+    return JSON.stringify({
+      opcode:       'message',
+      toSerialCode: DEVICE_SN,
+      permitCode:   PERMIT_CODE,
+      message:      typeof payload === 'string' ? payload : JSON.stringify(payload),
+      sid,
+      messageType,
+      reqId:        reqId()
+    });
+  }
+
+  // ── Connexion Cylan ──────────────────────────────────────────────────────
+  async function connectCylan() {
+    try { SESSID = await loginToFast(); console.log('[login] OK'); }
+    catch (e) { console.warn('[login] cache utilisé:', e.message); }
+
     cylan = new WebSocket(CYLAN_IM, WS_OPTS);
 
     cylan.on('open', () => {
-      console.log('[cylan] connecté — envoi signin');
       cylan.send(JSON.stringify({
-        secret:     SECRET,
-        opcode:     'signin',
-        serialCode: SESSID,
-        reUseSid:   0,
-        key:        'cylanWebRtc',
-        reqId:      reqId(),
-        loginType:  0
+        secret: SECRET, opcode: 'signin',
+        serialCode: SESSID, reUseSid: 0,
+        key: 'cylanWebRtc', reqId: reqId(), loginType: 0
       }));
     });
 
@@ -142,13 +156,10 @@ wss.on('connection', (browser) => {
 
         if (msg.opcode === 'signin') {
           if (msg.code === 0) {
-            sid   = msg.sid;
-            ready = true;
-            const iceServers = buildIceServers(msg);
-            console.log('[cylan] signin OK, sid:', sid, '— ICE servers:', iceServers.length);
-            toBrowser({ type: 'ready', iceServers });
+            sid = msg.sid; ready = true;
+            console.log('[cylan] signin OK sid:', sid);
+            toBrowser({ type: 'ready', iceServers: buildIce(msg) });
           } else {
-            console.error('[cylan] signin refusé code:', msg.code);
             toBrowser({ type: 'error', message: `Signin refusé (code ${msg.code})` });
           }
 
@@ -156,168 +167,134 @@ wss.on('connection', (browser) => {
           let inner = {};
           try { inner = JSON.parse(msg.message || '{}'); } catch {}
 
-          if (msg.messageType === 'callResponse') {
-            // Réponse SDP de la caméra
-            console.log('[cylan] answer reçu depuis caméra');
-            toBrowser({ type: 'answer', sdp: inner.sdp });
-
-          } else if (msg.messageType === 'remoteCandidate') {
-            // Candidat ICE de la caméra
-            toBrowser({
-              type:          'candidate',
-              candidate:     inner.candidate,
-              sdpMid:        inner.sdpMid,
-              sdpMLineIndex: inner.sdpMLineIndex
-            });
-
-          } else if (msg.messageType === 'switchVideo') {
-            console.log('[cylan] switchVideo reçu (vidéo active)');
-            toBrowser({ type: 'switchVideo' });
-
-          } else if (msg.messageType === 'hangup') {
-            console.log('[cylan] hangup reçu');
-            toBrowser({ type: 'hangup' });
+          switch (msg.messageType) {
+            case 'callResponse':
+              console.log('[cylan] answer reçu');
+              toBrowser({ type: 'answer', sdp: inner.sdp });
+              break;
+            case 'remoteCandidate':
+              toBrowser({ type: 'candidate', candidate: inner.candidate, sdpMid: inner.sdpMid, sdpMLineIndex: inner.sdpMLineIndex });
+              break;
+            case 'switchVideo':
+              console.log('[cylan] switchVideo');
+              toBrowser({ type: 'switchVideo' });
+              break;
+            case 'snapShot':
+              // La caméra confirme la prise de vue (optionnel)
+              toBrowser({ type: 'snapShotAck' });
+              break;
+            case 'hangup':
+              console.log('[cylan] hangup');
+              toBrowser({ type: 'hangup' });
+              break;
+            default:
+              // Transmettre tout autre message au navigateur
+              toBrowser({ type: 'cameraMsg', messageType: msg.messageType, message: inner });
           }
 
         } else if (msg.opcode === 'heartbeat') {
-          // Ping/pong keepalive
           cylan.send(JSON.stringify({ opcode: 'heartbeat' }));
         }
-      } catch (e) {
-        console.error('[cylan] erreur parsing:', e.message);
-      }
+      } catch (e) { console.error('[cylan] parse:', e.message); }
     });
 
-    cylan.on('close', (code, reason) => {
-      console.log('[cylan] déconnecté:', code, reason.toString());
-      ready = false;
-      toBrowser({ type: 'error', message: 'Serveur Cylan déconnecté' });
-    });
-
-    cylan.on('error', (e) => {
-      console.error('[cylan] erreur:', e.message);
-      toBrowser({ type: 'error', message: `Erreur Cylan: ${e.message}` });
-    });
+    cylan.on('close',  (c, r) => { ready = false; toBrowser({ type: 'error', message: 'Cylan déconnecté' }); });
+    cylan.on('error',  (e)    => { toBrowser({ type: 'error', message: e.message }); });
   }
 
-  // ── Messages reçus du navigateur ──────────────────────────────────────────
+  // ── Messages du navigateur ───────────────────────────────────────────────
   browser.on('message', async (data) => {
     try {
       const msg = JSON.parse(data.toString());
+      const ok  = () => ready && cylan && cylan.readyState === WebSocket.OPEN;
 
-      if (msg.type === 'connect') {
-        // Initialiser la connexion Cylan
-        await connectCylan().catch(e => {
-          console.error('[browser] erreur connectCylan:', e.message);
-          toBrowser({ type: 'error', message: e.message });
-        });
+      switch (msg.type) {
 
-      } else if (msg.type === 'offer') {
-        if (!ready || !cylan || cylan.readyState !== WebSocket.OPEN) {
-          toBrowser({ type: 'error', message: 'Pas encore connecté à Cylan' });
-          return;
-        }
-        console.log('[browser] envoi offer → caméra');
-        cylan.send(JSON.stringify({
-          opcode:        'message',
-          videoCodecType: 0,
-          callType:       0,
-          volume:         0,
-          toSerialCode:   DEVICE_SN,
-          permitCode:     PERMIT_CODE,
-          message:        JSON.stringify({ type: 'offer', sdp: msg.sdp }),
-          sid:            sid,
-          messageType:    'callRequest',
-          reqId:          reqId()
-        }));
+        // Initialisation WebRTC
+        case 'connect':
+          await connectCylan().catch(e => toBrowser({ type: 'error', message: e.message }));
+          break;
 
-      } else if (msg.type === 'candidate') {
-        if (!ready || !cylan || cylan.readyState !== WebSocket.OPEN) return;
-        cylan.send(JSON.stringify({
-          opcode:       'message',
-          toSerialCode: DEVICE_SN,
-          permitCode:   PERMIT_CODE,
-          message:      JSON.stringify({
-            candidate:     msg.candidate,
-            type:          'candidate',
-            sdpMLineIndex: msg.sdpMLineIndex,
-            sdpMid:        msg.sdpMid
-          }),
-          sid:         sid,
-          messageType: 'remoteCandidate',
-          reqId:       reqId()
-        }));
-
-      } else if (msg.type === 'hangup') {
-        if (cylan && cylan.readyState === WebSocket.OPEN && sid) {
+        case 'offer':
+          if (!ok()) return toBrowser({ type: 'error', message: 'Non connecté' });
           cylan.send(JSON.stringify({
-            opcode:       'message',
-            toSerialCode: DEVICE_SN,
-            permitCode:   PERMIT_CODE,
-            message:      '',
-            sid:          sid,
-            messageType:  'hangup',
-            reqId:        reqId()
+            opcode: 'message', videoCodecType: 0,
+            callType: msg.callType ?? 0,   // 0=vidéo+audio
+            volume: 0,
+            toSerialCode: DEVICE_SN, permitCode: PERMIT_CODE,
+            message: JSON.stringify({ type: 'offer', sdp: msg.sdp }),
+            sid, messageType: 'callRequest', reqId: reqId()
           }));
-        }
+          break;
+
+        case 'candidate':
+          if (!ok()) return;
+          cylan.send(JSON.stringify({
+            opcode: 'message', toSerialCode: DEVICE_SN, permitCode: PERMIT_CODE,
+            message: JSON.stringify({ candidate: msg.candidate, type: 'candidate', sdpMLineIndex: msg.sdpMLineIndex, sdpMid: msg.sdpMid }),
+            sid, messageType: 'remoteCandidate', reqId: reqId()
+          }));
+          break;
+
+        // ── Contrôles caméra ───────────────────────────────────────────────
+
+        // PTZ : { type:'ptz', action:'left'|'right'|'up'|'down'|'zoomin'|'zoomout'|'stop', speed:2 }
+        case 'ptz':
+          if (!ok()) return;
+          cylan.send(cylanMsg('ptzControl', { action: msg.action, speed: msg.speed ?? 2, stop: msg.action === 'stop' }));
+          break;
+
+        // Qualité vidéo : { type:'quality', definition: 0|1 }  (0=SD, 1=HD)
+        case 'quality':
+          if (!ok()) return;
+          cylan.send(cylanMsg('videoControl', { definition: msg.definition }));
+          break;
+
+        // Snapshot côté caméra (déclenche l'enregistrement sur la caméra)
+        case 'snapShot':
+          if (!ok()) return;
+          cylan.send(cylanMsg('snapShot', ''));
+          break;
+
+        // Raccrocher
+        case 'hangup':
+          if (ok()) cylan.send(cylanMsg('hangup', ''));
+          break;
       }
-    } catch (e) {
-      console.error('[browser] erreur message:', e.message);
-    }
+    } catch (e) { console.error('[browser] msg:', e.message); }
   });
 
   browser.on('close', () => {
     console.log('[browser] déconnecté');
     if (cylan) {
-      if (cylan.readyState === WebSocket.OPEN && sid) {
-        // Raccrocher proprement
-        try {
-          cylan.send(JSON.stringify({
-            opcode:       'message',
-            toSerialCode: DEVICE_SN,
-            permitCode:   PERMIT_CODE,
-            message:      '',
-            sid:          sid,
-            messageType:  'hangup',
-            reqId:        reqId()
-          }));
-        } catch {}
-      }
+      if (ready) try { cylan.send(cylanMsg('hangup', '')); } catch {}
       cylan.close();
     }
   });
 
-  browser.on('error', (e) => {
-    console.error('[browser] erreur WS:', e.message);
-  });
+  browser.on('error', (e) => console.error('[browser] WS:', e.message));
 });
 
-// ── Construire la liste des ICE servers ──────────────────────────────────────
-function buildIceServers(signinMsg) {
-  const servers = [];
-  if (signinMsg.turnAddr) {
-    signinMsg.turnAddr.forEach((url, i) => {
-      servers.push({
-        urls:       url,
-        username:   signinMsg.turnUser?.[i] || 'ade1',
-        credential: signinMsg.turnPass?.[i] || 'eXuvLVA'
-      });
-    });
-  }
-  if (signinMsg.stunAddr?.length) {
-    servers.push({ urls: signinMsg.stunAddr });
-  }
-  return servers;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function buildIce(msg) {
+  const s = [];
+  if (msg.turnAddr) msg.turnAddr.forEach((u, i) =>
+    s.push({ urls: u, username: msg.turnUser?.[i] || 'ade1', credential: msg.turnPass?.[i] || 'eXuvLVA' })
+  );
+  if (msg.stunAddr?.length) s.push({ urls: msg.stunAddr });
+  return s;
 }
 
-// ── Démarrage ────────────────────────────────────────────────────────────────
-httpServer.listen(PORT, () => {
-  console.log('────────────────────────────────────────────');
-  console.log('  Im Cam — Flux WebRTC Direct (sans app)');
-  console.log('────────────────────────────────────────────');
-  console.log(`  Ouvrir    : http://localhost:${PORT}`);
-  console.log(`  Signaling : ${CYLAN_IM}`);
+// ── Démarrage ─────────────────────────────────────────────────────────────────
+httpServer.listen(PORT, '0.0.0.0', () => {
+  const url = `http://localhost:${PORT}`;
+  console.log('\n────────────────────────────────────────────────');
+  console.log('  Im Cam — Plateforme WebRTC v2');
+  console.log('────────────────────────────────────────────────');
+  console.log(`  Local     : ${url}`);
+  console.log(`  Réseau    : http://<IP-Mac>:${PORT}`);
   console.log(`  Caméra    : ${DEVICE_SN}`);
+  if (ACCESS_KEY) console.log(`  Sécurisé  : oui (ACCESS_KEY défini)`);
   console.log('  Arrêter   : Ctrl+C');
-  console.log('────────────────────────────────────────────');
+  console.log('────────────────────────────────────────────────\n');
 });
