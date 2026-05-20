@@ -68,19 +68,22 @@
     /* overlay spinner / connect */
     #overlay {
       position:absolute; inset:0;
-      display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;
-      background:rgba(0,0,0,.88);
+      display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px;
+      background:rgba(0,0,0,.82);
     }
     #overlay.hidden { display:none; }
     .spinner { width:38px; height:38px; border:3px solid #222; border-top-color:var(--blue); border-radius:50%; animation:spin .8s linear infinite; }
     @keyframes spin { to{ transform:rotate(360deg) } }
-    .overlay-label { font-size:13px; color:var(--muted); text-align:center; max-width:260px; line-height:1.5; }
+    .overlay-label { font-size:13px; color:#9ca3af; text-align:center; max-width:280px; line-height:1.6; }
     .overlay-label.err { color:var(--red); }
     .btn-connect {
-      background:var(--blue); color:#fff; border:none; border-radius:8px;
-      padding:11px 28px; font-size:14px; font-weight:600; cursor:pointer; transition:.2s;
+      background:var(--blue); color:#fff; border:none; border-radius:10px;
+      padding:14px 36px; font-size:16px; font-weight:700; cursor:pointer;
+      box-shadow:0 0 24px rgba(59,130,246,.45);
+      transition:.2s; letter-spacing:.3px;
     }
-    .btn-connect:hover { background:#2563eb; }
+    .btn-connect:hover { background:#2563eb; box-shadow:0 0 32px rgba(59,130,246,.65); transform:scale(1.03); }
+    .btn-connect:disabled { opacity:.5; cursor:default; transform:none; }
 
     /* PTZ overlay on video (bottom-left) */
     #ptzPad {
@@ -200,7 +203,9 @@
 
       <!-- Overlay -->
       <div id="overlay">
-        <button class="btn-connect" id="connectBtn">▶&nbsp; Connecter</button>
+        <div style="font-size:42px;line-height:1;margin-bottom:4px">📷</div>
+        <div style="font-size:18px;font-weight:700;color:#e0e0e0;letter-spacing:.5px">Im Cam Live</div>
+        <button class="btn-connect" id="connectBtn">▶&nbsp;&nbsp;Connecter</button>
         <span class="overlay-label" id="overlayLabel">Connexion directe — app Im Cam non requise</span>
       </div>
 
