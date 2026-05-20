@@ -12,7 +12,10 @@ FFmpeg (conversion RTSP → HLS)
     │  segments .ts + cam.m3u8
     ▼
 Serveur Express (port 8000)
-    │  HTTP
+    │  HTTP + Basic Auth
+    ▼
+Cloudflare / ngrok tunnel (accès distant)
+    │  HTTPS
     ▼
 Navigateur — Video.js (lecture HLS)
 ```
@@ -46,12 +49,16 @@ Toutes les options sont des variables d'environnement :
 |----------|--------|-------------|
 | `CAMERA_IP` | `192.168.1.150` | IP de la caméra |
 | `CAMERA_RTSP_PORT` | `554` | Port RTSP |
-| `CAMERA_USER` | `admin` | Identifiant |
-| `CAMERA_PASS` | `admin` | Mot de passe |
+| `CAMERA_USER` | `admin` | Identifiant caméra |
+| `CAMERA_PASS` | `admin` | Mot de passe caméra |
 | `RTSP_URL` | *(auto)* | URL RTSP complète (remplace les champs ci-dessus) |
 | `RTSP_TRANSPORT` | `tcp` | `tcp` ou `udp` |
 | `PORT` | `8000` | Port du serveur web |
 | `HLS_DIR` | `/tmp/hls-stream` | Dossier segments HLS |
+| `AUTH_USER` | *(vide)* | Identifiant accès web (vide = désactivé) |
+| `AUTH_PASS` | *(vide)* | Mot de passe accès web |
+| `TUNNEL` | `none` | `cloudflared` \| `ngrok` \| `none` |
+| `NGROK_TOKEN` | *(vide)* | Token ngrok (optionnel, pour sous-domaine fixe) |
 
 Copier `.env.example` en `.env` et adapter, ou passer les variables directement :
 
@@ -78,6 +85,51 @@ Si l'URL par défaut ne fonctionne pas, le bouton **Essai suivant** dans l'inter
 4. `/h264/ch1/main/av_stream`
 5. `/cam/realmonitor?channel=1&subtype=0`
 6. `/videoMain`
+
+## Accès distant
+
+### Option A — Cloudflare Tunnel (recommandé, gratuit, aucun compte requis)
+
+```bash
+# 1. Installer cloudflared
+brew install cloudflared
+
+# 2. Lancer avec tunnel + auth
+AUTH_USER=prenom AUTH_PASS=motdepasse TUNNEL=cloudflared ./start.sh
+```
+
+Le terminal affiche :
+```
+────────────────────────────────────────────────────────────
+  Accès distant : https://xyz-abc-123.trycloudflare.com
+  Identifiant   : prenom
+  Mot de passe  : motdepasse
+────────────────────────────────────────────────────────────
+```
+
+Partager l'URL, l'identifiant et le mot de passe avec les personnes autorisées.
+
+> L'URL change à chaque redémarrage. Pour une URL fixe, créer un tunnel nommé dans le dashboard Cloudflare.
+
+### Option B — ngrok
+
+```bash
+# 1. Installer ngrok et créer un compte sur ngrok.com
+brew install ngrok/ngrok/ngrok
+ngrok config add-authtoken <votre-token>
+
+# 2. Lancer
+AUTH_USER=prenom AUTH_PASS=motdepasse TUNNEL=ngrok ./start.sh
+```
+
+### Option C — Redirection de port Freebox (IP fixe requis)
+
+1. Dans l'interface Freebox (`http://192.168.1.254`) → **Redirections de port**
+2. Ajouter une règle : port externe `8000` → `192.168.1.xxx` (IP du Mac) port `8000`
+3. Lancer le serveur avec auth : `AUTH_USER=prenom AUTH_PASS=motdepasse ./start.sh`
+4. Accéder via `http://<ip-publique-freebox>:8000`
+
+> Activer l'IP fixe chez Free pour que l'adresse ne change pas.
 
 ## Dépannage
 

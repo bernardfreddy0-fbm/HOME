@@ -184,6 +184,10 @@
       <span class="info-label">Statut</span>
       <span class="info-value" id="inf-status">Initialisation…</span>
     </div>
+    <div class="info-row" id="row-public" style="display:none">
+      <span class="info-label">Accès distant</span>
+      <span class="info-value"><a id="inf-public" href="#" target="_blank" style="color:#e74c3c;text-decoration:none"></a></span>
+    </div>
   </div>
 </main>
 
@@ -234,10 +238,18 @@
   function poll() {
     fetch("/api/status")
       .then((r) => r.json())
-      .then(({ ready, rtspUrl, hlsUrl }) => {
+      .then(({ ready, rtspUrl, hlsUrl, publicUrl }) => {
         setStatus(ready, rtspUrl, hlsUrl);
+        // Afficher l'URL du tunnel si disponible
+        if (publicUrl) {
+          const row = document.getElementById("row-public");
+          const link = document.getElementById("inf-public");
+          row.style.display = "";
+          link.href = publicUrl;
+          link.textContent = publicUrl;
+        }
         if (!ready) schedPoll(3000);
-        else schedPoll(10000); // polling moins fréquent une fois live
+        else schedPoll(10000);
       })
       .catch(() => {
         document.getElementById("inf-status").textContent = "Serveur inaccessible";

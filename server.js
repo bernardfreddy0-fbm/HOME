@@ -3,11 +3,14 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const config = require("./config");
+const { startTunnel, stopTunnel } = require("./tunnel");
 
 const app = express();
 const HLS_DIR = config.server.hlsDir;
 
 // État du processus FFmpeg
+let publicUrl = null;   // URL du tunnel si actif
+
 let ffmpegProc = null;
 let streamReady = false;
 let currentRtspUrl = null;
@@ -89,6 +92,23 @@ function stopStream() {
   streamReady = false;
 }
 
+// ── Authentification HTTP basique ─────────────────────────────────────────
+
+function basicAuth(req, res, next) {
+  const { user, pass } = config.auth;
+  if (!user) return next();
+  const header = req.headers.authorization || "";
+  if (header.startsWith("Basic ")) {
+    const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
+    const sep = decoded.indexOf(":");
+    if (decoded.slice(0, sep) === user && decoded.slice(sep + 1) === pass)
+      return next();
+  }
+  res.set("WWW-Authenticate", 'Basic realm="Im Cam"').status(401).end();
+}
+
+app.use(basicAuth);
+
 // ── Routes API ─────────────────────────────────────────────────────────────
 
 app.use(express.json());
@@ -101,6 +121,7 @@ app.get("/api/status", (req, res) => {
       ? currentRtspUrl.replace(/:([^@]+)@/, ":*****@")
       : null,
     hlsUrl: streamReady ? "/stream/cam.m3u8" : null,
+    publicUrl: publicUrl || null,
   });
 });
 
@@ -145,12 +166,38 @@ app.use(express.static(path.join(__dirname, "public")));
 // ── Démarrage ─────────────────────────────────────────────────────────────
 
 const PORT = config.server.port;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`[server] Serveur démarré sur http://localhost:${PORT}`);
   console.log(`[server] Caméra cible : ${config.camera.ip}:${config.camera.rtspPort}`);
+
+  if (config.auth.user) {
+    console.log(`[server] Authentification activée (utilisateur : ${config.auth.user})`);
+  } else {
+    console.log("[server] ⚠  Auth désactivée — définir AUTH_USER/AUTH_PASS avant d'exposer sur internet");
+  }
+
+  // Lancer le tunnel si demandé
+  if (config.tunnel.provider !== "none") {
+    console.log(`[tunnel] Démarrage du tunnel ${config.tunnel.provider}…`);
+    try {
+      publicUrl = await startTunnel(config.tunnel.provider, PORT);
+      const sep = "─".repeat(60);
+      console.log(`\n${sep}`);
+      console.log(`  Accès distant : ${publicUrl}`);
+      if (config.auth.user) {
+        console.log(`  Identifiant   : ${config.auth.user}`);
+        console.log(`  Mot de passe  : ${config.auth.pass}`);
+      }
+      console.log(`${sep}\n`);
+    } catch (err) {
+      console.error(`[tunnel] Échec : ${err.message}`);
+      console.error("[tunnel] Vérifier que cloudflared/ngrok est installé (brew install cloudflared)");
+    }
+  }
+
   // Lancer le flux automatiquement au démarrage
   startStream(getRtspUrl(0));
 });
 
-process.on("SIGINT", () => { stopStream(); process.exit(0); });
-process.on("SIGTERM", () => { stopStream(); process.exit(0); });
+process.on("SIGINT",  () => { stopStream(); stopTunnel(); process.exit(0); });
+process.on("SIGTERM", () => { stopStream(); stopTunnel(); process.exit(0); });

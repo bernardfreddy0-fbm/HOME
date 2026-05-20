@@ -25,4 +25,14 @@ module.exports = {
     listSize: 3,         // segments en mémoire
     transport: process.env.RTSP_TRANSPORT || "tcp",
   },
+  // Authentification HTTP basique (obligatoire pour l'accès distant)
+  auth: {
+    user: process.env.AUTH_USER || "",   // vide = auth désactivée
+    pass: process.env.AUTH_PASS || "",
+  },
+  // Tunnel vers internet : "cloudflared" | "ngrok" | "none"
+  tunnel: {
+    provider: process.env.TUNNEL || "none",
+    ngrokToken: process.env.NGROK_TOKEN || "",
+  },
 };
