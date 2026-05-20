@@ -150,6 +150,13 @@ app.use('/freebox', createProxyMiddleware({
   }
 }));
 
+// No-cache sur les HTML pour éviter que Safari serve une version périmée
+app.use((req, res, next) => {
+  if (req.path.endsWith('.html') || req.path === '/') {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public'), { index: 'cylan.html' }));
 app.get('/api/status',  (_req, res) => res.json({
   ok:      true,

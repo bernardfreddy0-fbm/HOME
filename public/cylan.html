@@ -439,8 +439,13 @@ async function createPc(iceServers) {
   pc = new RTCPeerConnection({ iceServers });
 
   pc.ontrack = (e) => {
-    if (e.track.kind === 'video') {
+    // Toujours assigner le stream dès le premier track (audio ou vidéo)
+    if (e.streams && e.streams[0] && videoEl.srcObject !== e.streams[0]) {
       videoEl.srcObject = e.streams[0];
+      // Safari exige un appel explicite à play() quand srcObject est assigné par JS
+      videoEl.play().catch(() => {});
+    }
+    if (e.track.kind === 'video') {
       hideOverlay();
       setStatus('connected', 'Flux en direct');
       connected = true;
@@ -455,15 +460,22 @@ async function createPc(iceServers) {
 
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
-    if (s === 'connected' || s === 'completed') { hideOverlay(); setStatus('connected','Flux en direct'); }
+    if (s === 'connected' || s === 'completed') {
+      setStatus('connected', 'Flux en direct');
+      // Lancer play() si le stream est déjà là mais pas encore joué (fallback Safari)
+      if (videoEl.srcObject && videoEl.paused) videoEl.play().catch(() => {});
+    }
     else if (s === 'failed')       { setStatus('error','ICE échoué'); showConnectBtn('Connexion ICE échouée', true); }
     else if (s === 'disconnected') setStatus('connecting','Reconnexion…');
   };
 
-  pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.addTransceiver('audio', { direction: 'recvonly' });
+  // addTransceiver (Chrome/Firefox) + offerToReceive (Safari legacy)
+  try {
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+  } catch (_) {}
 
-  const offer = await pc.createOffer();
+  const offer = await pc.createOffer({ offerToReceiveVideo: true, offerToReceiveAudio: true });
   await pc.setLocalDescription(offer);
   send({ type: 'offer', sdp: offer.sdp, callType: 0 });
 }
