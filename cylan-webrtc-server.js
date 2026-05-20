@@ -1,5 +1,5 @@
 // cylan-webrtc-server.js  v2
-// Proxy de signaling WebRTC Cylan — contrôles PTZ, qualité, audio, snapshot
+// Proxy WebRTC Cylan + reverse proxy Freebox Remote
 // Usage : PORT=8002 node cylan-webrtc-server.js
 
 'use strict';
@@ -9,6 +9,8 @@ const http      = require('http');
 const express   = require('express');
 const path      = require('path');
 const crypto    = require('crypto');
+const zlib      = require('zlib');
+const { createProxyMiddleware } = require('http-proxy-middleware');
 
 const PORT       = parseInt(process.env.PORT || '8002', 10);
 const CYLAN_IM   = 'wss://fde.jfgou.com:443/im';
@@ -88,6 +90,65 @@ app.use((req, res, next) => {
   if (req.path === '/' || req.path.endsWith('.html') || req.path.endsWith('.css') || req.path.endsWith('.js')) return next();
   res.status(401).json({ error: 'Clé API invalide' });
 });
+
+// ── Reverse proxy Freebox Remote ─────────────────────────────────────────────
+// Freebox Remote (Express ESM) tourne sur http://localhost:3000
+// On l'expose sous /freebox/ en injectant un patch fetch pour corriger les chemins absolus
+
+const FREEBOX_REMOTE_URL = process.env.FREEBOX_REMOTE_URL || 'http://localhost:3000';
+const FETCH_PATCH = `<script>
+(function(){
+  var _f=window.fetch;
+  window.fetch=function(u,o){
+    if(typeof u==='string'&&u.startsWith('/')&&!u.startsWith('/freebox/'))
+      u='/freebox'+u;
+    return _f.call(this,u,o);
+  };
+})();
+</script>`;
+
+app.use('/freebox', createProxyMiddleware({
+  target: FREEBOX_REMOTE_URL,
+  changeOrigin: true,
+  pathRewrite: { '^/freebox': '' },
+  selfHandleResponse: true,
+  on: {
+    proxyRes: (proxyRes, req, res) => {
+      const ct = proxyRes.headers['content-type'] || '';
+      const isHtml = ct.includes('text/html');
+
+      // Transférer les headers (sauf content-length car on va modifier le body HTML)
+      Object.entries(proxyRes.headers).forEach(([k, v]) => {
+        if (k.toLowerCase() !== 'content-length') res.setHeader(k, v);
+      });
+      res.statusCode = proxyRes.statusCode;
+
+      if (!isHtml) return proxyRes.pipe(res);
+
+      // Décompresser si nécessaire, injecter le patch fetch avant </head>
+      const enc = proxyRes.headers['content-encoding'] || '';
+      let stream = proxyRes;
+      if (enc === 'gzip')   stream = proxyRes.pipe(zlib.createGunzip());
+      if (enc === 'br')     stream = proxyRes.pipe(zlib.createBrotliDecompress());
+      if (enc === 'deflate')stream = proxyRes.pipe(zlib.createInflate());
+      res.removeHeader('content-encoding');
+
+      const chunks = [];
+      stream.on('data', c => chunks.push(c));
+      stream.on('end', () => {
+        let html = Buffer.concat(chunks).toString('utf8');
+        // Injecter patch avant </head>
+        html = html.replace('</head>', FETCH_PATCH + '</head>');
+        res.setHeader('content-length', Buffer.byteLength(html));
+        res.end(html);
+      });
+      stream.on('error', () => res.end());
+    },
+    error: (_err, _req, res) => {
+      res.status(502).send('Freebox Remote inaccessible — lancer : cd ~/Desktop/freebox-remote && node server.js');
+    }
+  }
+}));
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/',            (_req, res) => res.sendFile(path.join(__dirname, 'public', 'cylan.html')));
